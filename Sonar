@@ -1,0 +1,94 @@
+parameters:
+- name: enable_unit_tests
+  type: boolean
+  default: true
+- name: install_dotnet
+  type: boolean
+  default: true
+- name: dotnet_version
+  type: string
+  default: '6.0.405'
+- name: sonarcloud_org
+  type: string
+  default: 'sonar org'
+- name: sonarcloud_projectKey
+  type: string
+  default: 'Projectkey'
+- name: sonarcloud_projectName
+  type: string
+  default: 'sonar project name'
+- name: enable_sonar_scan
+  type: boolean
+  default: true
+- name: publishPackages
+  type: boolean
+  default: false
+
+steps:
+- task: UseDotNet@2
+  condition: eq( ${{ parameters.install_dotnet }}, true )
+  displayName: 'Dotnet Setup'
+  inputs:    
+    packageType: 'sdk'
+    version: ${{ parameters.dotnet_version }}
+
+- task: NuGetAuthenticate@1
+
+- task: NuGetCommand@2
+  displayName: 'Restore packages'
+  inputs:
+    restoreSolution: /Availability/Hotels.HBSI.Availability.sln
+    feedsToUse: 'config'
+    nugetConfigPath: '$(NuGetConfigPath)'
+    
+- task: SonarCloudPrepare@1
+  inputs:
+    SonarCloud: 'service name'
+    organization: 'org name'
+    scannerMode: 'MSBuild'
+    projectKey: 'Project key'
+    projectName: 'Project name'
+    
+- task: DotNetCoreCLI@2
+  displayName: 'Build Availability Function Project'
+  inputs:
+    command: publish
+    publishWebProjects: false
+    projects: '**/Availability\Hotels.HBSI.AvailabilityFunction/Hotels.HBSI.AvailabilityFunction.csproj'
+    arguments: '--configuration $(BuildConfiguration) --output $(Build.ArtifactStagingDirectory)'
+    zipAfterPublish: false
+    
+- task: DotNetCoreCLI@2
+  condition: eq( ${{ parameters.enable_unit_tests }}, true )
+  displayName: 'Run Tests'
+  inputs:
+    command: test
+    projects: '**/Availability\Hotels.HBSI.*/*.csproj'
+    arguments: '--configuration Release --no-build /p:CollectCoverage=true /p:CoverletOutput=$(System.DefaultWorkingDirectory)/coverage/ /p:CoverletOutputFormat=opencover'
+    
+- task: SonarCloudAnalyze@1
+  condition: eq( ${{ parameters.install_dotnet }}, true )
+
+- task: SonarCloudPublish@1
+  condition: eq( ${{ parameters.install_dotnet }}, true )
+  inputs:
+    pollingTimeoutSec: '300'
+
+- task: NuGetCommand@2
+  displayName: 'Generate package'
+  condition: eq('${{ parameters.publishPackages }}', true)
+  inputs:
+    command: 'pack'
+    packagesToPack: '$(build.sourcesDirectory)/pipelines/build/AzureFunctions/Availability.Functions.nuspec'
+    packDestination: '$(Build.ArtifactStagingDirectory)/NugetPackages'
+    versioningScheme: 'byBuildNumber'
+    buildProperties: '-configuration $(BuildConfiguration)'
+
+- task: DotNetCoreCLI@2
+  displayName: 'Publish'
+  condition: eq('${{ parameters.publishPackages }}', true)
+  inputs:
+    command: 'push'
+    packagesToPush: '$(Build.ArtifactStagingDirectory)/NugetPackages/*.nupkg'
+    nuGetFeedType: 'internal'
+    publishVstsFeed: '$(DeployablesFeed)'
